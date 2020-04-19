@@ -14,5 +14,5 @@ stages:
 timeout: 60
 branch:
   include:
-  - master
+  - chris_send
 notification: {}
