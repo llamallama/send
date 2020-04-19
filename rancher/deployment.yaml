@@ -1,0 +1,141 @@
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: send
+spec:
+  selector:
+    app: send
+  type: ClusterIP
+  ports:
+    - port: 1443
+      protocol: TCP
+      targetPort: 1443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: send
+  labels:
+    app: send
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: send
+  template:
+    metadata:
+      labels:
+        app: send
+    spec:
+      imagePullSecrets:
+        - name: docker-hub
+      containers:
+        - name: send
+          image: ${CICD_IMAGE}:${CICD_EXECUTION_SEQUENCE}
+          ports:
+          - containerPort: 1443
+          env:
+          - name: NODE_ENV
+            value: production
+          - name: REDIS_HOST
+            value: redis
+          - name: S3_BUCKET
+            value: send.pipetogrep.org
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                key: sendAwsSecretKey
+                name: aws
+                optional: false
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                key: sendAwsAccessKey
+                name: aws
+                optional: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: redis
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - image: redis
+        imagePullPolicy: Always
+        name: redis
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: false
+        stdin: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        tty: true
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - echo never > /host-sys/kernel/mm/transparent_hugepage/enabled
+        image: redis
+        imagePullPolicy: IfNotPresent
+        name: disable-thp
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /host-sys
+          name: host-sys
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - hostPath:
+          path: /sys
+          type: ""
+        name: host-sys
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-cluster
+    kubernetes.io/tls-acme: '"true"'
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+  name: send
+spec:
+  rules:
+  - host: send.pipetogrep.org
+    http:
+      paths:
+      - backend:
+          serviceName: send
+          servicePort: 1443
+  tls:
+  - hosts:
+    - send.pipetogrep.org
+    secretName: send.pipetogrep.org
+status:
+  loadBalancer:
+    ingress:
+    - ip: 192.168.0.48
+    - ip: 192.168.0.49
+
